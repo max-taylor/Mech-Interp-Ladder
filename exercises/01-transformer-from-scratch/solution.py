@@ -29,30 +29,40 @@ class LayerNorm(nn.Module):
     """Params: w [d_model], b [d_model]."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.cfg: Config = cfg
+        self.w: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model))
+        self.b: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model))
 
     def forward(self, x: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_model"]:
-        raise NotImplementedError
+        # Formula is: (x - mean(x)) / std(x) . y + B
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+        return (x - mean) / (var + self.cfg.layer_norm_eps).sqrt() * self.w + self.b
 
 
 class Embed(nn.Module):
     """Params: W_E [d_vocab, d_model]."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.W_E: nn.Parameter = nn.Parameter(torch.empty(cfg.d_vocab, cfg.d_model));
 
     def forward(self, tokens: Int[Tensor, "batch pos"]) -> Float[Tensor, "batch pos d_model"]:
-        raise NotImplementedError
-
+        return self.W_E[tokens]
 
 class PosEmbed(nn.Module):
     """Params: W_pos [n_ctx, d_model]."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.W_pos: nn.Parameter = nn.Parameter(torch.empty(cfg.n_ctx, cfg.d_model));
 
     def forward(self, tokens: Int[Tensor, "batch pos"]) -> Float[Tensor, "batch pos d_model"]:
-        raise NotImplementedError
+        batch, pos = tokens.shape
+        rows = self.W_pos[:pos]
+        repeated = einops.repeat(rows, "pos d_model -> batch pos d_model", batch=batch)
+        return repeated
 
 
 class Attention(nn.Module):
@@ -63,7 +73,18 @@ class Attention(nn.Module):
     """
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.W_Q: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_model, cfg.d_head));
+        self.W_K: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_model, cfg.d_head));
+        self.W_V: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_model, cfg.d_head));
+        
+        self.b_Q: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_head));
+        self.b_K: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_head));
+        self.b_V: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_head));
+
+        self.W_O: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_head, cfg.d_model));
+
+        self.b_O: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model));
 
     def forward(self, x: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_model"]:
         raise NotImplementedError
@@ -93,7 +114,9 @@ class Unembed(nn.Module):
     """Params: W_U [d_model, d_vocab], b_U [d_vocab]."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.W_U: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model, cfg.d_vocab));
+        self.b_U: nn.Parameter = nn.Parameter(torch.empty(cfg.d_vocab));
 
     def forward(self, x: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_vocab"]:
         raise NotImplementedError
@@ -103,7 +126,7 @@ class Transformer(nn.Module):
     """Submodules: embed, pos_embed, blocks (nn.ModuleList), ln_final, unembed."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__()
 
     def forward(self, tokens: Int[Tensor, "batch pos"]) -> Float[Tensor, "batch pos d_vocab"]:
         raise NotImplementedError
@@ -114,7 +137,7 @@ if __name__ == "__main__":
 
     reference = load_gpt2("cpu", processing=False)
     model = Transformer(Config())
-    model.load_state_dict(reference.state_dict(), strict=False)
+    _ = model.load_state_dict(reference.state_dict(), strict=False)
     tokens = reference.to_tokens("The quick brown fox jumps over the lazy dog.")
     diff = (model(tokens) - reference(tokens)).abs().max().item()
     print(f"max |logit diff| = {diff:.2e}")
