@@ -74,6 +74,7 @@ class Attention(nn.Module):
 
     def __init__(self, cfg: Config):
         super().__init__();
+        self.cfg = cfg;
         self.W_Q: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_model, cfg.d_head));
         self.W_K: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_model, cfg.d_head));
         self.W_V: nn.Parameter = nn.Parameter(torch.empty(cfg.n_heads, cfg.d_model, cfg.d_head));
@@ -87,27 +88,61 @@ class Attention(nn.Module):
         self.b_O: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model));
 
     def forward(self, x: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_model"]:
-        raise NotImplementedError
+        q = einops.einsum(x, self.W_Q, "batch pos d_model, n_heads d_model d_head -> batch pos n_heads d_head") + self.b_Q
+        k = einops.einsum(x, self.W_K, "batch pos d_model, n_heads d_model d_head -> batch pos n_heads d_head") + self.b_K
+        v = einops.einsum(x, self.W_V, "batch pos d_model, n_heads d_model d_head -> batch pos n_heads d_head") + self.b_V
+
+        # Calculate the q and k scores
+        # Omit d_head here, so we take the dot product of a q and k
+        scores: Float[Tensor, "batch n_heads pos_q pos_k"] = einops.einsum(q, k, "batch pos_q n_heads d_head, batch pos_k n_heads d_head -> batch n_heads pos_q pos_k") / self.cfg.d_head ** 0.5;
+
+        # Scores shape: 0-batch, 1-n_heads, 2-pos_q, 3-pos_k
+        # -1 is pos_k
+        pos = scores.shape[-1]
+
+        # Zero out values that are "above the diagonal" this prevents a look-ahead.
+        mask = torch.triu(torch.ones(pos, pos, dtype=torch.bool, device=scores.device), diagonal=1)
+        # Sets values above the diagonal to be very large negatives
+        scores = scores.masked_fill(mask, float("-inf"))
+
+        # Softmax the values, the large negatives become zero. the large positives become 1
+        pattern = scores.softmax(dim=-1)
+
+        z = einops.einsum(v, pattern, "batch pos_k n_heads d_head, batch n_heads pos_q pos_k -> batch pos_q n_heads d_head")
+
+        return einops.einsum(z, self.W_O, "batch pos n_heads d_head, n_heads d_head d_model -> batch pos d_model") + self.b_O
 
 
 class MLP(nn.Module):
     """Params: W_in [d_model, d_mlp], b_in [d_mlp], W_out [d_mlp, d_model], b_out [d_model]. GELU (tanh approx)."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.W_in: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model, cfg.d_mlp));
+        self.b_in: nn.Parameter = nn.Parameter(torch.empty(cfg.d_mlp));
+        self.W_out: nn.Parameter = nn.Parameter(torch.empty(cfg.d_mlp, cfg.d_model));
+        self.b_out: nn.Parameter = nn.Parameter(torch.empty(cfg.d_model));
 
     def forward(self, x: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_model"]:
-        raise NotImplementedError
+        expanded = einops.einsum(x, self.W_in, "batch pos d_model, d_model d_mlp -> batch pos d_mlp") + self.b_in;
+        gelu_applied = torch.nn.functional.gelu(expanded, approximate="tanh");
+        return einops.einsum(gelu_applied, self.W_out, "batch pos d_mlp, d_mlp d_model -> batch pos d_model") + self.b_out;
 
 
 class TransformerBlock(nn.Module):
     """Pre-LN block. Submodules: ln1, attn, ln2, mlp."""
 
     def __init__(self, cfg: Config):
-        raise NotImplementedError
+        super().__init__();
+        self.ln1: LayerNorm = LayerNorm(cfg);
+        self.attn: Attention = Attention(cfg);
+        self.ln2: LayerNorm = LayerNorm(cfg);
+        self.mlp: MLP = MLP(cfg);
 
     def forward(self, resid: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_model"]:
-        raise NotImplementedError
+        resid_mid: Float[Tensor, "batch pos d_model"] = resid + self.attn(self.ln1(resid));
+        resid_post: Float[Tensor, "batch pos d_model"] = resid_mid + self.mlp(self.ln2(resid_mid));
+        return resid_post;
 
 
 class Unembed(nn.Module):
@@ -119,7 +154,8 @@ class Unembed(nn.Module):
         self.b_U: nn.Parameter = nn.Parameter(torch.empty(cfg.d_vocab));
 
     def forward(self, x: Float[Tensor, "batch pos d_model"]) -> Float[Tensor, "batch pos d_vocab"]:
-        raise NotImplementedError
+        out = einops.einsum(x, self.W_U, "batch pos d_model, d_model d_vocab -> batch pos d_vocab")
+        return out + self.b_U
 
 
 class Transformer(nn.Module):
@@ -127,9 +163,20 @@ class Transformer(nn.Module):
 
     def __init__(self, cfg: Config):
         super().__init__()
+        self.embed = Embed(cfg);
+        self.pos_embed = PosEmbed(cfg);
+        self.blocks = nn.ModuleList(TransformerBlock(cfg) for _ in range(cfg.n_layers));
+
+        self.ln_final = LayerNorm(cfg);
+        self.unembed = Unembed(cfg);
 
     def forward(self, tokens: Int[Tensor, "batch pos"]) -> Float[Tensor, "batch pos d_vocab"]:
-        raise NotImplementedError
+        resid = self.embed(tokens) + self.pos_embed(tokens);
+        for layer in self.blocks:
+            resid = layer(resid);
+        ln = self.ln_final(resid);
+
+        return self.unembed(ln);
 
 
 if __name__ == "__main__":

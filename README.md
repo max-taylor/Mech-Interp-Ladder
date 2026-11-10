@@ -44,3 +44,8 @@ Reference solutions are not in this repo.
 
 - `common/`: device choice, GPT-2 loading, datasets and prompts, results and test helpers.
 - `exercises/NN-*/`: one folder per rung.
+
+
+## Links
+
+https://www.alignmentforum.org/posts/jP9KDyMkchuv6tHwm/how-to-become-a-mechanistic-interpretability-researcher
